@@ -21,7 +21,7 @@ import matplotlib
 from numpy.linalg import inv
 
 from lib.options import BaseOptions
-from lib.mesh_util import save_obj_mesh_with_color, reconstruction
+from lib.mesh_util import save_obj_mesh_with_color, reconstruction, save_obj_mesh_with_uv
 from lib.data import EvalWPoseDataset, EvalDataset
 from lib.model import HGPIFuNetwNML, HGPIFuMRNet
 from lib.geometry import index
@@ -101,12 +101,19 @@ def gen_mesh_imgColor(res, net, cuda, data, save_path, thresh=0.5, use_octree=Tr
     b_max = data['b_max']
     try:
         save_img_path = save_path[:-4] + '.png'
+        tex_img_path = save_path[:-4] + '_texture.png'
         save_img_list = []
         for v in range(image_tensor_global.shape[0]):
             save_img = (np.transpose(image_tensor_global[v].detach().cpu().numpy(), (1, 2, 0)) * 0.5 + 0.5)[:, :, ::-1] * 255.0
             save_img_list.append(save_img)
         save_img = np.concatenate(save_img_list, axis=1)
+        
         cv2.imwrite(save_img_path, save_img)
+        
+        save_tex = (np.transpose(image_tensor[0].detach().cpu().numpy(), (1, 2, 0)) * 0.5 + 0.5)[:, :, ::-1] * 255.0
+        #flipping vertically and saving
+        save_tex = cv2.flip(save_tex, 0) 
+        cv2.imwrite(tex_img_path, save_tex)
 
         verts, faces, _, _ = reconstruction(
             net, cuda, calib_tensor, res, b_min, b_max, thresh, use_octree=use_octree, num_samples=100000)
@@ -115,6 +122,10 @@ def gen_mesh_imgColor(res, net, cuda, data, save_path, thresh=0.5, use_octree=Tr
         # if this returns error, projection must be defined somewhere else
         xyz_tensor = net.projection(verts_tensor, calib_tensor[:1])
         uv = xyz_tensor[:, :2, :]
+        uvs= uv.squeeze(0).transpose(0,1)
+        # rescaling to [0-1]
+        uvs = uvs * 0.5 +0.5
+        
         color = index(image_tensor[:1], uv).detach().cpu().numpy()[0].T
         color = color * 0.5 + 0.5
 
@@ -122,7 +133,7 @@ def gen_mesh_imgColor(res, net, cuda, data, save_path, thresh=0.5, use_octree=Tr
             calib_world = data['calib_world'].numpy()[0]
             verts = np.matmul(np.concatenate([verts, np.ones_like(verts[:,:1])],1), inv(calib_world).T)[:,:3]
 
-        save_obj_mesh_with_color(save_path, verts, faces, color)
+        save_obj_mesh_with_uv(save_path, verts, faces, uvs)
 
     except Exception as e:
         print(e)
@@ -207,7 +218,7 @@ def recon(opt, use_rect=False):
                 save_path = '%s/%s/recon/result_%s_%d.obj' % (opt.results_path, opt.name, test_data['name'], opt.resolution)
 
                 print(save_path)
-                gen_mesh(opt.resolution, netMR, cuda, test_data, save_path, components=opt.use_compose)
+                gen_mesh_imgColor(opt.resolution, netMR, cuda, test_data, save_path, components=opt.use_compose)
             else:
                 for j in range(test_dataset.get_n_person(i)):
                     test_dataset.person_id = j
